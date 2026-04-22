@@ -110,3 +110,124 @@ def test_test_json_no_rich_markup(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert "[bold" not in result.output
     # Should be valid JSON
     json.loads(result.output)
+
+
+def test_test_json_output_structure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """test --output json returns correct top-level structure."""
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["test", "--output", "json"])
+    data = json.loads(result.output)
+    assert "status" in data
+    assert "results" in data
+    assert isinstance(data["results"], list)
+
+
+def test_test_json_queryable_with_passing_tests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """test --output json with queryable destination and passing tests."""
+    monkeypatch.chdir(tmp_path)
+    _write_credentials(tmp_path)
+    _write_sync(
+        tmp_path,
+        {
+            "name": "duck-sync",
+            "model": "SELECT 1 AS id",
+            "destination": {
+                "type": "duckdb",
+                "path": ":memory:",
+            },
+            "tests": [{"row_count": {"min": 1}}],
+        },
+    )
+    result = runner.invoke(app, ["test", "--output", "json"])
+    data = json.loads(result.output)
+    assert data["status"] == "passed"
+    assert len(data["results"]) == 1
+    assert data["results"][0]["sync"] == "duck-sync"
+    assert data["results"][0]["skipped"] is False
+    assert "tests" in data["results"][0]
+
+
+def test_test_json_queryable_with_failing_tests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """test --output json with queryable destination and failing tests."""
+    monkeypatch.chdir(tmp_path)
+    _write_credentials(tmp_path)
+    _write_sync(
+        tmp_path,
+        {
+            "name": "duck-sync-fail",
+            "model": "SELECT 1 AS id",
+            "destination": {
+                "type": "duckdb",
+                "path": ":memory:",
+            },
+            "tests": [{"row_count": {"min": 100}}],
+        },
+    )
+    result = runner.invoke(app, ["test", "--output", "json"])
+    data = json.loads(result.output)
+    assert data["status"] == "failed"
+    assert len(data["results"]) == 1
+    assert data["results"][0]["sync"] == "duck-sync-fail"
+    assert "tests" in data["results"][0]
+    assert data["results"][0]["status"] == "failed"
+
+
+def test_test_json_multiple_syncs_mixed_results(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """test --output json with multiple syncs having mixed results."""
+    monkeypatch.chdir(tmp_path)
+    _write_credentials(tmp_path)
+    _write_sync(
+        tmp_path,
+        {
+            "name": "pass-sync",
+            "model": "SELECT 1 AS id",
+            "destination": {"type": "duckdb", "path": ":memory:"},
+            "tests": [{"row_count": {"min": 1}}],
+        },
+    )
+    _write_sync(
+        tmp_path,
+        {
+            "name": "fail-sync",
+            "model": "SELECT 1 AS id",
+            "destination": {"type": "duckdb", "path": ":memory:"},
+            "tests": [{"row_count": {"min": 100}}],
+        },
+    )
+    result = runner.invoke(app, ["test", "--output", "json"])
+    data = json.loads(result.output)
+    assert data["status"] == "failed"
+    assert len(data["results"]) == 2
+    statuses = {r["sync"]: r["status"] for r in data["results"]}
+    assert statuses["pass-sync"] == "success"
+    assert statuses["fail-sync"] == "failed"
+
+
+def test_test_json_with_dry_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """test --output json respects dry-run flag."""
+    monkeypatch.chdir(tmp_path)
+    _write_credentials(tmp_path)
+    _write_sync(
+        tmp_path,
+        {
+            "name": "dry-sync",
+            "model": "SELECT 1 AS id",
+            "destination": {"type": "duckdb", "path": ":memory:"},
+            "tests": [{"row_count": {"min": 1}}],
+        },
+    )
+    result = runner.invoke(app, ["test", "--output", "json", "--dry-run"])
+    data = json.loads(result.output)
+    assert data["status"] == "passed"
+    assert len(data["results"]) == 1
+    assert data["results"][0]["dry_run"] is True
